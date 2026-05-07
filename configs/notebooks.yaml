@@ -1,5 +1,6 @@
 defaults:
   cookies_file: ../cookies/qz_cookies.txt
+  har_file: ../har/qz.sii.edu.cn_ws2.har
   rows: 24
   cols: 80
   connect_timeout_sec: 10
@@ -7,7 +8,7 @@ defaults:
   concurrency: 4
 
 notebooks:
-  - name: inspire-main
+  - name: h200_ncu
     tags: [active, inspire]
     notebook_id: 93b4aafa-7d2d-43df-90d0-74093845feee
     entry_url: https://qz.sii.edu.cn/ide?notebook_id=93b4aafa-7d2d-43df-90d0-74093845feee
@@ -15,3 +16,6 @@ notebooks:
     cookies_file: ../cookies/qz_cookies.txt
     har_file: ../har/qz.sii.edu.cn_ws2.har
     notes: 当前已验证可以执行命令，以及上传下载文件
+
+  - name: qz_dev
+    entry_url: https://qz.sii.edu.cn/ide?notebook_id=3354400f-c72e-4c0f-ab5e-5e1e3d79e7d8

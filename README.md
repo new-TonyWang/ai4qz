@@ -67,19 +67,19 @@ PYTHONPATH=src python3 -m ai4qz.cli list
 检查某台 notebook 的 cookies、`_xsrf`、`terminals`、`contents`：
 
 ```bash
-PYTHONPATH=src python3 -m ai4qz.cli check inspire-main
+PYTHONPATH=src python3 -m ai4qz.cli check h200_ncu
 ```
 
 深度检查，实际执行一条 `pwd`：
 
 ```bash
-PYTHONPATH=src python3 -m ai4qz.cli check inspire-main --deep
+PYTHONPATH=src python3 -m ai4qz.cli check h200_ncu --deep
 ```
 
 执行单台命令：
 
 ```bash
-PYTHONPATH=src python3 -m ai4qz.cli run inspire-main --cmd 'pwd && whoami'
+PYTHONPATH=src python3 -m ai4qz.cli run h200_ncu --cmd 'pwd && whoami'
 ```
 
 按 tag 批量 fan-out：
@@ -91,25 +91,25 @@ PYTHONPATH=src python3 -m ai4qz.cli fanout --tag active --cmd 'hostname'
 上传文件：
 
 ```bash
-PYTHONPATH=src python3 -m ai4qz.cli upload inspire-main ./local.txt remote/dir/local.txt
+PYTHONPATH=src python3 -m ai4qz.cli upload h200_ncu ./local.txt remote/dir/local.txt
 ```
 
 下载文件：
 
 ```bash
-PYTHONPATH=src python3 -m ai4qz.cli download inspire-main remote/dir/local.txt ./downloads/local.txt
+PYTHONPATH=src python3 -m ai4qz.cli download h200_ncu remote/dir/local.txt ./downloads/local.txt
 ```
 
 打印解析后的 `base_url`：
 
 ```bash
-PYTHONPATH=src python3 -m ai4qz.cli discover inspire-main
+PYTHONPATH=src python3 -m ai4qz.cli discover h200_ncu
 ```
 
 用最小配置文件运行：
 
 ```bash
-ai4qz --config ./configs/notebooks.minimal.yaml discover inspire-main
+ai4qz --config ./configs/notebooks.minimal.yaml discover h200_ncu
 ```
 
 ## 长期 Shell
@@ -119,7 +119,7 @@ ai4qz --config ./configs/notebooks.minimal.yaml discover inspire-main
 可用命令：
 
 ```bash
-ai4qz --config ./configs/notebooks.minimal.yaml session-open inspire-main
+ai4qz --config ./configs/notebooks.minimal.yaml session-open h200_ncu
 ai4qz --config ./configs/notebooks.minimal.yaml session-list
 ai4qz --config ./configs/notebooks.minimal.yaml session-run <session_id> --cmd 'pwd && whoami'
 ai4qz --config ./configs/notebooks.minimal.yaml session-attach <session_id>
