@@ -278,6 +278,7 @@ def cmd_session_run(args: argparse.Namespace) -> int:
     if not client.ensure_terminal_exists(session.terminal_name):
         print(f"session {session.session_id} terminal no longer exists", file=sys.stderr)
         return 1
+    session = client.ensure_tmux_session(session)
     result = client.run_command_in_terminal(session.terminal_name, _extract_command(args))
     session.last_used_at = time.strftime("%Y-%m-%dT%H:%M:%S%z", time.localtime())
     store.upsert(session)
@@ -298,6 +299,7 @@ def cmd_session_attach(args: argparse.Namespace) -> int:
     if not client.ensure_terminal_exists(session.terminal_name):
         print(f"session {session.session_id} terminal no longer exists", file=sys.stderr)
         return 1
+    session = client.ensure_tmux_session(session)
     print("attach started, press Ctrl-] to detach")
     session.last_used_at = time.strftime("%Y-%m-%dT%H:%M:%S%z", time.localtime())
     store.upsert(session)

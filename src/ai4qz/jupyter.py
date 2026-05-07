@@ -73,24 +73,36 @@ class JupyterNotebookClient:
         *,
         include_xsrf: bool = False,
         timeout: int = 30,
+        retries: int = 0,
         **kwargs: object,
     ) -> requests.Response:
         url = f"{self.base_url}/{path.lstrip('/')}"
         headers = dict(kwargs.pop("headers", {}))
         headers = {**self._headers(include_xsrf=include_xsrf), **headers}
-        response = self.session.request(
-            method=method,
-            url=url,
-            headers=headers,
-            timeout=timeout,
-            **kwargs,
-        )
-        if response.status_code >= 400:
-            body = response.text[:400].strip()
-            raise RuntimeError(
-                f"{self.target.name}: {method} {url} failed with {response.status_code}: {body}"
-            )
-        return response
+        last_error: Exception | None = None
+        for attempt in range(retries + 1):
+            try:
+                response = self.session.request(
+                    method=method,
+                    url=url,
+                    headers=headers,
+                    timeout=timeout,
+                    **kwargs,
+                )
+                if response.status_code >= 400:
+                    body = response.text[:400].strip()
+                    raise RuntimeError(
+                        f"{self.target.name}: {method} {url} failed with {response.status_code}: {body}"
+                    )
+                return response
+            except (requests.exceptions.SSLError, requests.exceptions.ConnectionError) as exc:
+                last_error = exc
+                if attempt >= retries:
+                    raise
+                time.sleep(0.6 * (attempt + 1))
+        if last_error is not None:
+            raise last_error
+        raise RuntimeError(f"{self.target.name}: request failed unexpectedly for {method} {url}")
 
     @staticmethod
     def _contents_path(remote_path: str) -> str:
@@ -100,11 +112,16 @@ class JupyterNotebookClient:
         return f"api/contents/{quote(cleaned, safe='/')}"
 
     def list_terminals(self) -> list[dict]:
-        response = self._request("GET", "api/terminals")
+        response = self._request("GET", "api/terminals", retries=2)
         return response.json()
 
     def get_contents_metadata(self, remote_path: str = "") -> dict:
-        response = self._request("GET", self._contents_path(remote_path), params={"content": 0})
+        response = self._request(
+            "GET",
+            self._contents_path(remote_path),
+            params={"content": 0},
+            retries=2,
+        )
         return response.json()
 
     def create_terminal(self, cwd: str = "") -> str:
@@ -115,6 +132,7 @@ class JupyterNotebookClient:
             include_xsrf=True,
             data=payload,
             headers={"Content-Type": "text/plain;charset=UTF-8"},
+            retries=2,
         )
         data = response.json()
         return str(data["name"])
@@ -459,32 +477,6 @@ class JupyterNotebookClient:
             tmux_session_name=tmux_session_name if use_tmux else None,
             notes=self.target.notes,
         )
-        if use_tmux:
-            ws = self._open_terminal_socket(terminal_name)
-            try:
-                setup_result, _ = self._run_over_websocket(
-                    ws,
-                    (
-                        "if command -v tmux >/dev/null 2>&1; then "
-                        f"tmux new-session -Ad -s {tmux_session_name} && printf 'tmux_ready\\n'; "
-                        "else printf 'tmux_missing\\n'; "
-                        "fi"
-                    ),
-                    timeout_sec=self.defaults.command_timeout_sec,
-                )
-                if "tmux_missing" in setup_result:
-                    session.use_tmux = False
-                    session.tmux_session_name = None
-                    return session
-                if "tmux_ready" not in setup_result:
-                    raise RuntimeError(
-                        f"{self.target.name}: failed to prepare tmux session {tmux_session_name}"
-                    )
-                self._send_stdin(ws, f"tmux attach -t {tmux_session_name}\r")
-                time.sleep(0.5)
-                self._drain_socket(ws)
-            finally:
-                ws.close()
         return session
 
     def ensure_terminal_exists(self, terminal_name: str) -> bool:
@@ -494,11 +486,37 @@ class JupyterNotebookClient:
     def close_persistent_session(self, session: PersistentSession) -> None:
         self.delete_terminal(session.terminal_name)
 
+    def ensure_tmux_session(self, session: PersistentSession) -> PersistentSession:
+        if not session.use_tmux or not session.tmux_session_name:
+            return session
+        result = self.run_command_in_terminal(
+            session.terminal_name,
+            (
+                "if command -v tmux >/dev/null 2>&1; then "
+                f"tmux new-session -Ad -s {session.tmux_session_name} && printf 'tmux_ready\\n'; "
+                "else printf 'tmux_missing\\n'; "
+                "fi"
+            ),
+        )
+        if "tmux_missing" in result.output:
+            session.use_tmux = False
+            session.tmux_session_name = None
+            return session
+        if not result.ok or "tmux_ready" not in result.output:
+            raise RuntimeError(
+                f"{self.target.name}: failed to initialize tmux session {session.tmux_session_name}"
+            )
+        return session
+
     def attach_session(self, session: PersistentSession) -> None:
         ws = self._open_terminal_socket(session.terminal_name)
         self._drain_socket(ws)
         self._send_resize(ws)
         self._drain_socket(ws)
+        if session.use_tmux and session.tmux_session_name:
+            self._send_stdin(ws, f"tmux attach -t {session.tmux_session_name}\r")
+            time.sleep(0.5)
+            self._drain_socket(ws)
 
         old_tty = None
         stdin_fd = None
