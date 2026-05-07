@@ -96,3 +96,20 @@ class CommandResult:
     terminal_name: str | None
     seconds: float
     error: str | None = None
+
+
+@dataclass(slots=True)
+class PersistentSession:
+    session_id: str
+    target_name: str
+    terminal_name: str
+    base_url: str
+    cookies_file: Path
+    notebook_id: str | None
+    resolved_from: str
+    created_at: str
+    last_used_at: str
+    cwd: str = ""
+    use_tmux: bool = True
+    tmux_session_name: str | None = None
+    notes: str | None = None

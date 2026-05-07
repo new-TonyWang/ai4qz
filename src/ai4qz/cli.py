@@ -4,6 +4,7 @@ import argparse
 import json
 import os
 import sys
+import time
 from concurrent.futures import ThreadPoolExecutor, as_completed
 from dataclasses import asdict, is_dataclass
 from pathlib import Path
@@ -11,7 +12,8 @@ from typing import Any
 
 from .config import load_config, resolve_target
 from .jupyter import JupyterNotebookClient
-from .models import CommandResult, NotebookTarget
+from .models import CommandResult, NotebookTarget, PersistentSession
+from .session_store import SessionStore, project_root_from_config, resolved_target_from_session, session_store_path
 
 
 def _default_config_path() -> str:
@@ -41,10 +43,18 @@ def _resolve_config(args: argparse.Namespace):
     return load_config(args.config)
 
 
+def _session_store(config) -> SessionStore:
+    return SessionStore(session_store_path(config))
+
+
 def _build_client(config, target_name: str) -> JupyterNotebookClient:
     target = config.get_target(target_name)
     resolved = resolve_target(target, config.defaults)
     return JupyterNotebookClient(resolved, config.defaults)
+
+
+def _build_client_from_session(config, session: PersistentSession) -> JupyterNotebookClient:
+    return JupyterNotebookClient(resolved_target_from_session(session), config.defaults)
 
 
 def _extract_command(args: argparse.Namespace) -> str:
@@ -219,6 +229,97 @@ def cmd_download(args: argparse.Namespace) -> int:
     return 0
 
 
+def cmd_session_open(args: argparse.Namespace) -> int:
+    config = _resolve_config(args)
+    store = _session_store(config)
+    client = _build_client(config, args.target)
+    session = client.open_persistent_session(
+        cwd=args.cwd or "",
+        use_tmux=not args.no_tmux,
+        tmux_session_name=args.tmux_name,
+    )
+    store.upsert(session)
+    if args.json:
+        _print_json(session)
+    else:
+        print(f"session_id: {session.session_id}")
+        print(f"target: {session.target_name}")
+        print(f"terminal_name: {session.terminal_name}")
+        print(f"base_url: {session.base_url}")
+        print(f"use_tmux: {session.use_tmux}")
+        if session.tmux_session_name:
+            print(f"tmux_session_name: {session.tmux_session_name}")
+    return 0
+
+
+def cmd_session_list(args: argparse.Namespace) -> int:
+    config = _resolve_config(args)
+    store = _session_store(config)
+    sessions = store.list()
+    if args.json:
+        _print_json(sessions)
+    else:
+        if not sessions:
+            print("no persistent sessions")
+            return 0
+        for session in sessions:
+            print(
+                f"{session.session_id}\ttarget={session.target_name}\tterminal={session.terminal_name}\t"
+                f"tmux={session.tmux_session_name or '-'}\tlast_used_at={session.last_used_at}"
+            )
+    return 0
+
+
+def cmd_session_run(args: argparse.Namespace) -> int:
+    config = _resolve_config(args)
+    store = _session_store(config)
+    session = store.get(args.session_id)
+    client = _build_client_from_session(config, session)
+    if not client.ensure_terminal_exists(session.terminal_name):
+        print(f"session {session.session_id} terminal no longer exists", file=sys.stderr)
+        return 1
+    result = client.run_command_in_terminal(session.terminal_name, _extract_command(args))
+    session.last_used_at = time.strftime("%Y-%m-%dT%H:%M:%S%z", time.localtime())
+    store.upsert(session)
+    if args.json:
+        _print_json(result)
+    else:
+        _print_command_result(result)
+    if result.exit_code is not None:
+        return result.exit_code
+    return 1
+
+
+def cmd_session_attach(args: argparse.Namespace) -> int:
+    config = _resolve_config(args)
+    store = _session_store(config)
+    session = store.get(args.session_id)
+    client = _build_client_from_session(config, session)
+    if not client.ensure_terminal_exists(session.terminal_name):
+        print(f"session {session.session_id} terminal no longer exists", file=sys.stderr)
+        return 1
+    print("attach started, press Ctrl-] to detach")
+    session.last_used_at = time.strftime("%Y-%m-%dT%H:%M:%S%z", time.localtime())
+    store.upsert(session)
+    client.attach_session(session)
+    return 0
+
+
+def cmd_session_close(args: argparse.Namespace) -> int:
+    config = _resolve_config(args)
+    store = _session_store(config)
+    session = store.get(args.session_id)
+    client = _build_client_from_session(config, session)
+    if client.ensure_terminal_exists(session.terminal_name):
+        client.close_persistent_session(session)
+    store.delete(session.session_id)
+    if args.json:
+        _print_json({"closed": session.session_id})
+    else:
+        print(f"closed session: {session.session_id}")
+    return 0
+
+
 def build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(description="Control qz notebooks from the local machine")
     parser.add_argument(
@@ -261,6 +362,25 @@ def build_parser() -> argparse.ArgumentParser:
     download.add_argument("remote_path")
     download.add_argument("local_path")
 
+    session_open = subparsers.add_parser("session-open", help="create a persistent notebook shell session")
+    session_open.add_argument("target")
+    session_open.add_argument("--cwd", help="optional working directory for terminal creation")
+    session_open.add_argument("--no-tmux", action="store_true", help="do not initialize tmux")
+    session_open.add_argument("--tmux-name", default="ai4qz", help="remote tmux session name")
+
+    subparsers.add_parser("session-list", help="list locally tracked persistent sessions")
+
+    session_run = subparsers.add_parser("session-run", help="run a command inside an existing persistent session")
+    session_run.add_argument("session_id")
+    session_run.add_argument("--cmd", help="command string to run")
+    session_run.add_argument("command", nargs=argparse.REMAINDER)
+
+    session_attach = subparsers.add_parser("session-attach", help="attach local terminal to a persistent session")
+    session_attach.add_argument("session_id")
+
+    session_close = subparsers.add_parser("session-close", help="close a persistent session and delete its terminal")
+    session_close.add_argument("session_id")
+
     return parser
 
 
@@ -275,6 +395,11 @@ def main(argv: list[str] | None = None) -> int:
         "fanout": cmd_fanout,
         "upload": cmd_upload,
         "download": cmd_download,
+        "session-open": cmd_session_open,
+        "session-list": cmd_session_list,
+        "session-run": cmd_session_run,
+        "session-attach": cmd_session_attach,
+        "session-close": cmd_session_close,
     }
     return handlers[args.subcommand](args)
 

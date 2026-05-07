@@ -1,9 +1,16 @@
 from __future__ import annotations
 
 import base64
+import contextlib
+import io
 import json
+import os
+import select
 import re
+import sys
+import termios
 import time
+import tty
 import uuid
 from pathlib import Path
 from urllib.parse import quote, urlparse
@@ -12,7 +19,7 @@ import requests
 import websocket
 
 from .cookies import build_cookie_header, build_requests_session, find_xsrf_token, load_cookiejar
-from .models import CheckResult, CommandResult, Defaults, ResolvedTarget
+from .models import CheckResult, CommandResult, Defaults, PersistentSession, ResolvedTarget
 
 
 class TerminalExecutionError(RuntimeError):
@@ -255,6 +262,12 @@ class JupyterNotebookClient:
     def _send_resize(self, ws: websocket.WebSocket) -> None:
         ws.send(json.dumps(["set_size", self.defaults.rows, self.defaults.cols, 0, 0]))
 
+    def _prepare_terminal(self, ws: websocket.WebSocket) -> str:
+        self._drain_socket(ws)
+        self._send_resize(ws)
+        self._drain_socket(ws)
+        return self._sync_terminal(ws)
+
     def _sync_terminal(self, ws: websocket.WebSocket) -> str:
         token = uuid.uuid4().hex
         marker = f"__AI4QZ_READY__{token}__"
@@ -316,10 +329,7 @@ class JupyterNotebookClient:
         command: str,
         timeout_sec: int,
     ) -> tuple[str, int]:
-        self._drain_socket(ws)
-        self._send_resize(ws)
-        self._drain_socket(ws)
-        ready_marker = self._sync_terminal(ws)
+        ready_marker = self._prepare_terminal(ws)
 
         token = uuid.uuid4().hex
         marker_prefix = f"__AI4QZ_DONE__{token}__RC="
@@ -360,12 +370,14 @@ class JupyterNotebookClient:
         cleaned = self._sanitize_output(buffer, ready_marker=ready_marker, command=command)
         return cleaned, exit_code
 
-    def run_command(self, command: str, *, cwd: str = "") -> CommandResult:
+    def run_command_in_terminal(
+        self,
+        terminal_name: str,
+        command: str,
+    ) -> CommandResult:
         started = time.monotonic()
-        terminal_name: str | None = None
         partial_output = ""
         try:
-            terminal_name = self.create_terminal(cwd=cwd)
             ws = self._open_terminal_socket(terminal_name)
             try:
                 output, exit_code = self._run_over_websocket(
@@ -407,9 +419,123 @@ class JupyterNotebookClient:
                 seconds=seconds,
                 error=str(exc),
             )
+
+    def run_command(self, command: str, *, cwd: str = "") -> CommandResult:
+        started = time.monotonic()
+        terminal_name: str | None = None
+        try:
+            terminal_name = self.create_terminal(cwd=cwd)
+            result = self.run_command_in_terminal(terminal_name, command)
+            result.seconds = time.monotonic() - started
+            return result
         finally:
             if terminal_name:
                 try:
                     self.delete_terminal(terminal_name)
                 except Exception:
                     pass
+
+    def open_persistent_session(
+        self,
+        *,
+        cwd: str = "",
+        use_tmux: bool = True,
+        tmux_session_name: str = "ai4qz",
+    ) -> PersistentSession:
+        terminal_name = self.create_terminal(cwd=cwd)
+        now = time.strftime("%Y-%m-%dT%H:%M:%S%z", time.localtime())
+        session = PersistentSession(
+            session_id=uuid.uuid4().hex[:12],
+            target_name=self.target.name,
+            terminal_name=terminal_name,
+            base_url=self.base_url,
+            cookies_file=self.target.cookies_file,
+            notebook_id=self.target.notebook_id,
+            resolved_from=self.target.resolved_from,
+            created_at=now,
+            last_used_at=now,
+            cwd=cwd,
+            use_tmux=use_tmux,
+            tmux_session_name=tmux_session_name if use_tmux else None,
+            notes=self.target.notes,
+        )
+        if use_tmux:
+            ws = self._open_terminal_socket(terminal_name)
+            try:
+                setup_result, _ = self._run_over_websocket(
+                    ws,
+                    (
+                        "if command -v tmux >/dev/null 2>&1; then "
+                        f"tmux new-session -Ad -s {tmux_session_name} && printf 'tmux_ready\\n'; "
+                        "else printf 'tmux_missing\\n'; "
+                        "fi"
+                    ),
+                    timeout_sec=self.defaults.command_timeout_sec,
+                )
+                if "tmux_missing" in setup_result:
+                    session.use_tmux = False
+                    session.tmux_session_name = None
+                    return session
+                if "tmux_ready" not in setup_result:
+                    raise RuntimeError(
+                        f"{self.target.name}: failed to prepare tmux session {tmux_session_name}"
+                    )
+                self._send_stdin(ws, f"tmux attach -t {tmux_session_name}\r")
+                time.sleep(0.5)
+                self._drain_socket(ws)
+            finally:
+                ws.close()
+        return session
+
+    def ensure_terminal_exists(self, terminal_name: str) -> bool:
+        terminals = self.list_terminals()
+        return any(str(item["name"]) == str(terminal_name) for item in terminals)
+
+    def close_persistent_session(self, session: PersistentSession) -> None:
+        self.delete_terminal(session.terminal_name)
+
+    def attach_session(self, session: PersistentSession) -> None:
+        ws = self._open_terminal_socket(session.terminal_name)
+        self._drain_socket(ws)
+        self._send_resize(ws)
+        self._drain_socket(ws)
+
+        old_tty = None
+        stdin_fd = None
+        try:
+            if sys.stdin.isatty():
+                stdin_fd = sys.stdin.fileno()
+                old_tty = termios.tcgetattr(stdin_fd)
+                tty.setraw(stdin_fd)
+
+            ws.settimeout(0.1)
+            while True:
+                with contextlib.suppress(websocket.WebSocketTimeoutException):
+                    raw = ws.recv()
+                    if isinstance(raw, bytes):
+                        raw = raw.decode("utf-8", errors="replace")
+                    message = json.loads(raw)
+                    if isinstance(message, list) and message:
+                        if message[0] == "stdout":
+                            sys.stdout.write(str(message[1]))
+                            sys.stdout.flush()
+                        elif message[0] == "disconnect":
+                            raise RuntimeError("remote terminal disconnected")
+
+                if stdin_fd is not None:
+                    ready, _, _ = select.select([stdin_fd], [], [], 0.05)
+                    if ready:
+                        data = os.read(stdin_fd, 1024)
+                        if not data:
+                            break
+                        if b"\x1d" in data:
+                            break
+                        text = data.decode("utf-8", errors="ignore")
+                        if text:
+                            self._send_stdin(ws, text)
+                else:
+                    break
+        finally:
+            if stdin_fd is not None and old_tty is not None:
+                termios.tcsetattr(stdin_fd, termios.TCSADRAIN, old_tty)
+            ws.close()

@@ -112,6 +112,45 @@ PYTHONPATH=src python3 -m ai4qz.cli discover inspire-main
 ai4qz --config ./configs/notebooks.minimal.yaml discover inspire-main
 ```
 
+## 长期 Shell
+
+当前版本已经支持持久 terminal session。
+
+可用命令：
+
+```bash
+ai4qz --config ./configs/notebooks.minimal.yaml session-open inspire-main
+ai4qz --config ./configs/notebooks.minimal.yaml session-list
+ai4qz --config ./configs/notebooks.minimal.yaml session-run <session_id> --cmd 'pwd && whoami'
+ai4qz --config ./configs/notebooks.minimal.yaml session-attach <session_id>
+ai4qz --config ./configs/notebooks.minimal.yaml session-close <session_id>
+```
+
+行为说明：
+
+- `session-open`
+  - 创建一个持久 Jupyter terminal
+  - 默认优先尝试启用 `tmux`
+  - 如果远端没有 `tmux`，自动降级为裸 terminal 持久会话
+- `session-run`
+  - 在同一个持久 terminal 里反复执行命令
+  - 不会删除 terminal，因此可以保留上下文
+- `session-attach`
+  - 把本地终端直接附着到远端 terminal
+  - 脱离快捷键是 `Ctrl-]`
+- `session-close`
+  - 显式删除远端 terminal，并移除本地 session 记录
+
+本地 session 状态会保存在项目下的 `.ai4qz/sessions.json`。
+
+### 长期 Shell 的边界
+
+- 如果远端 notebook/container 重启，原 terminal 会丢失，session 无法恢复
+- 如果远端有 `tmux`，重连体验会更稳；如果没有，也能工作，但上下文恢复能力较弱
+- 交互 attach 目前更适合常规 shell 命令；全屏 TUI 程序属于尽力支持，不保证完全稳定
+- `session-run` 适合“复用同一个 shell 上下文执行多条命令”
+- `upload/download` 仍然是文件传输的主路径，不建议长期 shell 承担大文件同步
+
 ## 约束
 
 - `run`/`fanout` 面向非交互式单条命令，不适合长期交互 shell
