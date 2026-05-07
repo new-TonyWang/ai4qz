@@ -1,0 +1,15 @@
+defaults:
+  cookies_file: ../cookies/qz_cookies.txt
+  har_file: ../har/qz.sii.edu.cn_ws2.har
+  rows: 24
+  cols: 80
+  connect_timeout_sec: 10
+  command_timeout_sec: 60
+  concurrency: 4
+
+notebooks:
+  - name: inspire-main
+    entry_url: https://qz.sii.edu.cn/ide?notebook_id=93b4aafa-7d2d-43df-90d0-74093845feee
+
+  - name: example-notebook
+    entry_url: https://qz.sii.edu.cn/ide?notebook_id=b648bf9d-42b3-4aa3-ba6c-426452742fff

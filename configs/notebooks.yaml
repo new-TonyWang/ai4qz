@@ -1,0 +1,17 @@
+defaults:
+  cookies_file: ../cookies/qz_cookies.txt
+  rows: 24
+  cols: 80
+  connect_timeout_sec: 10
+  command_timeout_sec: 60
+  concurrency: 4
+
+notebooks:
+  - name: inspire-main
+    tags: [active, inspire]
+    notebook_id: 93b4aafa-7d2d-43df-90d0-74093845feee
+    entry_url: https://qz.sii.edu.cn/ide?notebook_id=93b4aafa-7d2d-43df-90d0-74093845feee
+    base_url: https://ai-notebook-inspire.sii.edu.cn/ws-9225c304-b480-4eb7-bfd3-1648f450c00f/project-f5d61a1e-de5c-4dc2-aa9a-1d6199ac3969/user-398d19bd-4b0e-414e-8718-abbfcc526b37/jupyter/93b4aafa-7d2d-43df-90d0-74093845feee/61533c1b-90c1-45f5-b1d6-a36e29389107
+    cookies_file: ../cookies/qz_cookies.txt
+    har_file: ../har/qz.sii.edu.cn_ws2.har
+    notes: 当前已验证可以执行命令，以及上传下载文件
