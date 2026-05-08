@@ -167,6 +167,9 @@ class JupyterNotebookClient:
 
     def upload_file(self, local_path: Path, remote_path: str) -> dict:
         data = local_path.read_bytes()
+        # If remote_path looks like a directory (ends with / or is empty), append the local filename.
+        if remote_path.endswith("/") or not remote_path.strip("/"):
+            remote_path = f"{remote_path.strip('/')}/{local_path.name}".lstrip("/")
         parent = remote_path.rsplit("/", 1)[0] if "/" in remote_path.strip("/") else ""
         self._ensure_remote_directory(parent)
         payload = {
@@ -190,7 +193,18 @@ class JupyterNotebookClient:
             params={"content": 1, "format": "base64"},
         )
         data = response.json()
-        content = data.get("content", "")
+        if data.get("type") == "directory":
+            raise RuntimeError(
+                f"{self.target.name}: remote path is a directory, not a file: {remote_path}"
+            )
+        content = data.get("content") or ""
+        if local_path.exists() and local_path.is_dir():
+            remote_name = Path(remote_path).name
+            if not remote_name:
+                raise RuntimeError(
+                    f"{self.target.name}: cannot derive filename from remote path: {remote_path}"
+                )
+            local_path = local_path / remote_name
         local_path.parent.mkdir(parents=True, exist_ok=True)
         local_path.write_bytes(base64.b64decode(content))
         return data
