@@ -47,10 +47,14 @@ def _session_store(config) -> SessionStore:
     return SessionStore(session_store_path(config))
 
 
-def _build_client(config, target_name: str) -> JupyterNotebookClient:
+def _build_client(config, target_name: str, *, timeout: int | None = None) -> JupyterNotebookClient:
     target = config.get_target(target_name)
     resolved = resolve_target(target, config.defaults)
-    return JupyterNotebookClient(resolved, config.defaults)
+    defaults = config.defaults
+    if timeout is not None:
+        from dataclasses import replace
+        defaults = replace(defaults, command_timeout_sec=timeout)
+    return JupyterNotebookClient(resolved, defaults)
 
 
 def _build_client_from_session(config, session: PersistentSession) -> JupyterNotebookClient:
@@ -149,9 +153,14 @@ def _print_command_result(result: CommandResult) -> None:
         print(f"[{result.name}] error: {result.error}")
 
 
+def _timeout_from_args(args: argparse.Namespace) -> int | None:
+    val = getattr(args, "timeout", None)
+    return int(val) if val is not None else None
+
+
 def cmd_run(args: argparse.Namespace) -> int:
     config = _resolve_config(args)
-    client = _build_client(config, args.target)
+    client = _build_client(config, args.target, timeout=_timeout_from_args(args))
     result = client.run_command(_extract_command(args))
     if args.json:
         _print_json(result)
@@ -177,6 +186,12 @@ def cmd_fanout(args: argparse.Namespace) -> int:
     if not selected:
         raise SystemExit("no notebook matched the fanout selector")
 
+    timeout = _timeout_from_args(args)
+    defaults = config.defaults
+    if timeout is not None:
+        from dataclasses import replace
+        defaults = replace(defaults, command_timeout_sec=timeout)
+
     results: list[CommandResult] = []
     concurrency = args.concurrency or config.defaults.concurrency
     with ThreadPoolExecutor(max_workers=concurrency) as pool:
@@ -184,8 +199,8 @@ def cmd_fanout(args: argparse.Namespace) -> int:
         for target in selected:
             future = pool.submit(
                 lambda notebook=target: JupyterNotebookClient(
-                    resolve_target(notebook, config.defaults),
-                    config.defaults,
+                    resolve_target(notebook, defaults),
+                    defaults,
                 ).run_command(command)
             )
             future_map[future] = target.name
@@ -235,10 +250,15 @@ def cmd_session_open(args: argparse.Namespace) -> int:
     client = _build_client(config, args.target)
     session = client.open_persistent_session(
         cwd=args.cwd or "",
-        use_tmux=not args.no_tmux,
+        use_tmux=args.tmux and not args.no_tmux,
         tmux_session_name=args.tmux_name,
     )
     store.upsert(session)
+    if args.tui:
+        session = client.ensure_tmux_session(session)
+        store.upsert(session)
+        client.attach_tui(session)
+        return 0
     if args.json:
         _print_json(session)
     else:
@@ -274,7 +294,12 @@ def cmd_session_run(args: argparse.Namespace) -> int:
     config = _resolve_config(args)
     store = _session_store(config)
     session = store.get(args.session_id)
-    client = _build_client_from_session(config, session)
+    timeout = _timeout_from_args(args)
+    defaults = config.defaults
+    if timeout is not None:
+        from dataclasses import replace
+        defaults = replace(defaults, command_timeout_sec=timeout)
+    client = JupyterNotebookClient(resolved_target_from_session(session), defaults)
     if not client.ensure_terminal_exists(session.terminal_name):
         print(f"session {session.session_id} terminal no longer exists", file=sys.stderr)
         return 1
@@ -330,6 +355,7 @@ def build_parser() -> argparse.ArgumentParser:
         help="path to notebooks yaml config",
     )
     parser.add_argument("--json", action="store_true", help="print machine-readable json")
+    parser.add_argument("--timeout", type=int, help="command timeout in seconds (overrides config)")
 
     subparsers = parser.add_subparsers(dest="subcommand", required=True)
 
@@ -367,8 +393,10 @@ def build_parser() -> argparse.ArgumentParser:
     session_open = subparsers.add_parser("session-open", help="create a persistent notebook shell session")
     session_open.add_argument("target")
     session_open.add_argument("--cwd", help="optional working directory for terminal creation")
+    session_open.add_argument("--tmux", action="store_true", help="initialize and attach to a remote tmux session")
     session_open.add_argument("--no-tmux", action="store_true", help="do not initialize tmux")
     session_open.add_argument("--tmux-name", default="ai4qz", help="remote tmux session name")
+    session_open.add_argument("--tui", action="store_true", help="open session and launch interactive TUI")
 
     subparsers.add_parser("session-list", help="list locally tracked persistent sessions")
 

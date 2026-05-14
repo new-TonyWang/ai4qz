@@ -167,9 +167,6 @@ class JupyterNotebookClient:
 
     def upload_file(self, local_path: Path, remote_path: str) -> dict:
         data = local_path.read_bytes()
-        # If remote_path looks like a directory (ends with / or is empty), append the local filename.
-        if remote_path.endswith("/") or not remote_path.strip("/"):
-            remote_path = f"{remote_path.strip('/')}/{local_path.name}".lstrip("/")
         parent = remote_path.rsplit("/", 1)[0] if "/" in remote_path.strip("/") else ""
         self._ensure_remote_directory(parent)
         payload = {
@@ -193,18 +190,7 @@ class JupyterNotebookClient:
             params={"content": 1, "format": "base64"},
         )
         data = response.json()
-        if data.get("type") == "directory":
-            raise RuntimeError(
-                f"{self.target.name}: remote path is a directory, not a file: {remote_path}"
-            )
-        content = data.get("content") or ""
-        if local_path.exists() and local_path.is_dir():
-            remote_name = Path(remote_path).name
-            if not remote_name:
-                raise RuntimeError(
-                    f"{self.target.name}: cannot derive filename from remote path: {remote_path}"
-                )
-            local_path = local_path / remote_name
+        content = data.get("content", "")
         local_path.parent.mkdir(parents=True, exist_ok=True)
         local_path.write_bytes(base64.b64decode(content))
         return data
@@ -506,13 +492,19 @@ class JupyterNotebookClient:
         result = self.run_command_in_terminal(
             session.terminal_name,
             (
-                "if command -v tmux >/dev/null 2>&1; then "
-                f"tmux new-session -Ad -s {session.tmux_session_name} && printf 'tmux_ready\\n'; "
+                "if [ -n \"$TMUX\" ]; then "
+                "printf 'tmux_nested\\n'; "
+                "elif command -v tmux >/dev/null 2>&1; then "
+                f"TMUX= tmux new-session -Ad -s {session.tmux_session_name} && printf 'tmux_ready\\n'; "
                 "else printf 'tmux_missing\\n'; "
                 "fi"
             ),
         )
-        if "tmux_missing" in result.output:
+        if (
+            "tmux_missing" in result.output
+            or "tmux_nested" in result.output
+            or "sessions should be nested with care" in result.output
+        ):
             session.use_tmux = False
             session.tmux_session_name = None
             return session
@@ -522,13 +514,29 @@ class JupyterNotebookClient:
             )
         return session
 
+    def attach_tui(self, session: PersistentSession) -> None:
+        from .tui import run_tui
+
+        ws = self._open_terminal_socket(session.terminal_name)
+        self._drain_socket(ws)
+        self._send_resize(ws)
+        self._drain_socket(ws)
+        if session.use_tmux and session.tmux_session_name:
+            self._send_stdin(ws, f"TMUX= tmux attach -t {session.tmux_session_name}\r")
+            time.sleep(0.5)
+            self._drain_socket(ws)
+        try:
+            run_tui(ws, session)
+        finally:
+            ws.close()
+
     def attach_session(self, session: PersistentSession) -> None:
         ws = self._open_terminal_socket(session.terminal_name)
         self._drain_socket(ws)
         self._send_resize(ws)
         self._drain_socket(ws)
         if session.use_tmux and session.tmux_session_name:
-            self._send_stdin(ws, f"tmux attach -t {session.tmux_session_name}\r")
+            self._send_stdin(ws, f"TMUX= tmux attach -t {session.tmux_session_name}\r")
             time.sleep(0.5)
             self._drain_socket(ws)
 

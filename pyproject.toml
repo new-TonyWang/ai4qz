@@ -12,6 +12,8 @@ dependencies = [
   "PyYAML>=6.0",
   "requests>=2.32.0",
   "websocket-client>=1.8.0",
+  "pyte>=0.8.0",
+  "urwid>=2.1.0",
 ]
 
 [project.scripts]
