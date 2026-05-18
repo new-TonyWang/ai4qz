@@ -20,6 +20,27 @@ pip install -e .
 - HAR 放在 `har/` 目录
 - 这些文件不会提交进 git
 
+### 获取 Cookies 文件
+
+1. 在浏览器中登录 `https://qz.sii.edu.cn`，进入目标 notebook 的 Jupyter 页面
+2. 打开浏览器开发者工具（F12）→ Application → Cookies，确认 `qz.sii.edu.cn` 和实际 notebook 域名下都有 cookie
+3. 安装浏览器扩展导出 Netscape 格式 cookies：
+   - Chrome: [Get cookies.txt LOCALLY](https://chromecast.com/get-cookies-txt-locally)
+   - Firefox: [cookies.txt](https://addons.mozilla.org/en-US/firefox/addon/cookies-txt/)
+4. 在 `qz.sii.edu.cn` 页面上点击导出，保存到 `cookies/` 目录（如 `cookies/qz_cookies.txt`）
+
+> 注意：需要同时覆盖门户域名和 notebook 运行域名，否则终端和文件接口可能缺少 `_xsrf`。多账号不要混用同一份 cookies。
+
+### 获取 HAR 文件
+
+1. 在浏览器中打开 `https://qz.sii.edu.cn`，进入目标 notebook 的 Jupyter 页面
+2. 打开开发者工具（F12）→ Network 标签页
+3. 勾选 "Preserve log"
+4. 在 notebook 中执行一些操作（打开终端、浏览文件等），确保 Network 中捕获到 `/api/terminals`、`/api/contents` 等请求
+5. 右键 Network 列表 → "Save all as HAR with content"，保存到 `har/` 目录（如 `har/qz.sii.edu.cn.har`）
+
+> HAR 文件用于 cookies 推断 `base_url` 失败时的兜底，也能应对 notebook 重启后 `base_url` 漂移的情况。
+
 ### 最小配置
 
 每台 notebook 只需提供 `name` + `entry_url`，再在 `defaults` 里提供 `cookies_file` 和可选的 `har_file`。
@@ -96,7 +117,7 @@ ai4qz download h200_ncu /remote/dir/file.txt
 ai4qz download h200_ncu /remote/dir/file.txt --via-terminal
 ```
 
-> 下载时如果文件不在 Jupyter 内容根目录下（如 `/inspire/hdd/...`），contents API 会返回 404，此时自动回退到终端 base64 传输方式。
+> 下载时如果文件不在 Jupyter 内容根目录下（也就是你登陆时候显示的那个目录）（如 `/inspire/hdd/...`），contents API 会返回 404，此时自动回退到终端 base64 传输方式。
 
 ### 持久会话
 
