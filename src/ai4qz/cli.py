@@ -234,13 +234,23 @@ def cmd_upload(args: argparse.Namespace) -> int:
 def cmd_download(args: argparse.Namespace) -> int:
     config = _resolve_config(args)
     client = _build_client(config, args.target)
-    metadata = client.download_file(args.remote_path, Path(args.local_path))
+    local_path = Path(args.local_path) if args.local_path else Path(Path(args.remote_path).name)
+    via_terminal = getattr(args, "via_terminal", False)
+    try:
+        if via_terminal:
+            metadata = client.download_file_via_terminal(args.remote_path, local_path)
+        else:
+            metadata = client.download_file(args.remote_path, local_path)
+    except RuntimeError:
+        if via_terminal:
+            raise
+        metadata = client.download_file_via_terminal(args.remote_path, local_path)
+        print("(contents API unavailable, used terminal transfer)", file=sys.stderr)
     if args.json:
         _print_json(metadata)
     else:
-        print(f"downloaded: {args.remote_path} -> {args.local_path}")
+        print(f"downloaded: {args.remote_path} -> {local_path}")
         print(f"size: {metadata.get('size')}")
-        print(f"last_modified: {metadata.get('last_modified')}")
     return 0
 
 
@@ -388,7 +398,8 @@ def build_parser() -> argparse.ArgumentParser:
     download = subparsers.add_parser("download", help="download a notebook file to local disk")
     download.add_argument("target")
     download.add_argument("remote_path")
-    download.add_argument("local_path")
+    download.add_argument("local_path", nargs="?", help="local path (default: current dir, same filename as remote)")
+    download.add_argument("--via-terminal", action="store_true", help="use terminal base64 transfer instead of contents API")
 
     session_open = subparsers.add_parser("session-open", help="create a persistent notebook shell session")
     session_open.add_argument("target")

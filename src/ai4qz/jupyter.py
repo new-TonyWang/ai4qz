@@ -195,6 +195,16 @@ class JupyterNotebookClient:
         local_path.write_bytes(base64.b64decode(content))
         return data
 
+    def download_file_via_terminal(self, remote_path: str, local_path: Path) -> dict:
+        result = self.run_command(f"base64 '{remote_path}'")
+        if not result.ok:
+            raise RuntimeError(
+                f"{self.target.name}: base64 read failed for {remote_path}: {result.error or result.output}"
+            )
+        local_path.parent.mkdir(parents=True, exist_ok=True)
+        local_path.write_bytes(base64.b64decode(result.output.strip()))
+        return {"type": "file", "path": remote_path, "size": local_path.stat().st_size}
+
     def check(self, *, deep: bool = False) -> CheckResult:
         try:
             terminals = self.list_terminals()
